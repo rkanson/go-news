@@ -2,16 +2,12 @@ package main
 
 import (
 	"fmt"
-	"html/template"
 	"log"
-	"net/http"
 
 	"cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
 	"github.com/darkoatanasovski/htmltags"
-	"github.com/gorilla/mux"
 	"github.com/mmcdole/gofeed"
-	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 
 	"golang.org/x/net/context"
@@ -24,8 +20,7 @@ type Article struct {
 
 // NewsPageData Model
 type NewsPageData struct {
-	publication string
-	articles    []map[string]interface{}
+	news []map[string]interface{}
 }
 
 func main() {
@@ -44,47 +39,11 @@ func main() {
 		"Yahoo":    "https://www.yahoo.com/news/rss",
 	}
 
-	// for k, v := range publications {
-	// 	fmt.Println("Fetching:", k)
-	// 	news := getNews(k, v)
-	// 	saveNews(ctx, news, client)
-	// }
-
-	fmt.Println("Starting HTTP server...")
-	r := mux.NewRouter()
-
-	tmpl := template.Must(template.ParseFiles("main.html"))
-	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data := map[string]map[string]string{
-			"publications": publications,
-		}
-		tmpl.Execute(w, data)
-	})
-
-	news := template.Must(template.ParseFiles("news.html"))
-	r.HandleFunc("/{publication}", func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		fmt.Println("Visiting:", vars["publication"])
-		iter := client.Collection(vars["publication"]).Documents(ctx)
-		var articles []map[string]interface{}
-		for {
-			doc, err := iter.Next()
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				log.Fatalln(err)
-			}
-			articles = append(articles, doc.Data())
-		}
-		data := NewsPageData{
-			publication: vars["publication"],
-			articles:    articles,
-		}
-		news.Execute(w, data)
-	})
-
-	http.ListenAndServe(":80", r)
+	for k, v := range publications {
+		fmt.Println("Fetching:", k)
+		news := getNews(k, v)
+		saveNews(ctx, news, client)
+	}
 }
 
 func setupFirebase() (context.Context, *firestore.Client) {
