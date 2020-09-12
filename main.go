@@ -1,11 +1,17 @@
 package main
 
 import (
+	"fmt"
+	"html/template"
 	"log"
+	"net/http"
 
+	"cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
 	"github.com/darkoatanasovski/htmltags"
+	"github.com/gorilla/mux"
 	"github.com/mmcdole/gofeed"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 
 	"golang.org/x/net/context"
@@ -13,20 +19,79 @@ import (
 
 // Article Model for News Article Storage
 type Article struct {
-	title, description, link, date string
+	publisher, title, description, link, date string
 }
 
-// Publication Model for Storing arrays of Articles
-type Publication struct {
-	articles Article
+// NewsPageData Model
+type NewsPageData struct {
+	publication string
+	articles    []map[string]interface{}
 }
 
 func main() {
 
-	projectID := "go-news-rk"
+	ctx, client := setupFirebase()
+
+	publications := map[string]string{
+		"BBC":    "http://feeds.bbci.co.uk/news/world/rss.xml",
+		"CNN":    "http://rss.cnn.com/rss/cnn_us.rss",
+		"NYT":    "http://www.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+		"Huffpo": "https://www.huffpost.com/section/front-page/feed?x=1",
+		"Fox":    "http://feeds.foxnews.com/foxnews/latest",
+		"USA":    "http://rssfeeds.usatoday.com/UsatodaycomNation-TopStories",
+		// "Reuters":  "http://feeds.reuters.com/Reuters/domesticNews",
+		"Politico": "http://www.politico.com/rss/politicopicks.xml",
+		"Yahoo":    "https://www.yahoo.com/news/rss",
+	}
+
+	// for k, v := range publications {
+	// 	fmt.Println("Fetching:", k)
+	// 	news := getNews(k, v)
+	// 	saveNews(ctx, news, client)
+	// }
+
+	fmt.Println("Starting HTTP server...")
+	r := mux.NewRouter()
+
+	tmpl := template.Must(template.ParseFiles("main.html"))
+	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		data := map[string]map[string]string{
+			"publications": publications,
+		}
+		tmpl.Execute(w, data)
+	})
+
+	news := template.Must(template.ParseFiles("news.html"))
+	r.HandleFunc("/{publication}", func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		fmt.Println("Visiting:", vars["publication"])
+		iter := client.Collection(vars["publication"]).Documents(ctx)
+		var articles []map[string]interface{}
+		for {
+			doc, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				log.Fatalln(err)
+			}
+			articles = append(articles, doc.Data())
+		}
+		data := NewsPageData{
+			publication: vars["publication"],
+			articles:    articles,
+		}
+		news.Execute(w, data)
+	})
+
+	http.ListenAndServe(":80", r)
+}
+
+func setupFirebase() (context.Context, *firestore.Client) {
 	ctx := context.Background()
 	sa := option.WithCredentialsFile("./serviceAccountKey.json")
-	conf := &firebase.Config{ProjectID: projectID}
+	conf := &firebase.Config{ProjectID: "go-news-rk"}
+
 	app, err := firebase.NewApp(ctx, conf, sa)
 	if err != nil {
 		log.Fatalln(err)
@@ -36,30 +101,33 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer client.Close()
 
-	news := getNews("http://feeds.bbci.co.uk/news/world/rss.xml")
+	return ctx, client
+}
 
+func saveNews(ctx context.Context, news []Article, client *firestore.Client) {
 	for _, v := range news {
-		_, data, err := client.Collection("users").Add(ctx, v)
-
-		if data != nil {
-			log.Fatalf("Failed adding: %v", data)
-		}
+		_, _, err := client.Collection(v.publisher).Add(ctx, map[string]interface{}{
+			"title":       v.title,
+			"description": v.description,
+			"link":        v.link,
+			"date":        v.date,
+		})
 
 		if err != nil {
 			log.Fatalf("Failed adding: %v", err)
 		}
 	}
-
-	// getNews("http://rss.cnn.com/rss/cnn_us.rss")
-
 }
 
-func getNews(url string) []Article {
+func getNews(publisher string, url string) []Article {
 	var news []Article
 	fp := gofeed.NewParser()
-	feed, _ := fp.ParseURL(url)
+	feed, err := fp.ParseURL(url)
+
+	if err != nil {
+		log.Fatalln("Error:", err)
+	}
 
 	for i := 0; i < len(feed.Items); i++ {
 		stripTitle, _ := htmltags.Strip(feed.Items[i].Title, []string{}, true)
@@ -67,6 +135,7 @@ func getNews(url string) []Article {
 		stripLink, _ := htmltags.Strip(feed.Items[i].Link, []string{}, true)
 		stripDate, _ := htmltags.Strip(feed.Items[i].Published, []string{}, true)
 		article := Article{
+			publisher:   publisher,
 			title:       stripTitle.ToString(),
 			description: stripDesc.ToString(),
 			link:        stripLink.ToString(),
